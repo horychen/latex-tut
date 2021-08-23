@@ -68,36 +68,100 @@ def entries_to_str(entries):
     db.entries = entries
     return bibtexparser.dumps(db)
 
-import habanero, os
+import habanero, os, shutil
 from pprint import pprint
+
+def process_cr_result(res, paper_title, src, dst):
+    print('\tCrossRef found', len(res['message']['items']), 'results.')
+    print('\t\t', paper_title)
+
+    bool_found_in_first_crossref_query = False
+    mymatches = []
+    for index, item in enumerate(res['message']['items']):
+
+        crossref_title = item['title'][0]
+        crossref_title = crossref_title.replace('-', ' ')
+        crossref_title = crossref_title.replace('/', ' ')
+        crossref_title = crossref_title.replace(':', ' ')
+        crossref_title = crossref_title.replace(',', ' ')
+        crossref_title = crossref_title.replace('"', ' ')
+        crossref_title = crossref_title.lower()
+        words = crossref_title.split()
+
+        number_of_matches = len([word for word in words if word in paper_title])
+
+        print('\t\t', crossref_title, '(words:', len(words), number_of_matches, 'matches)' )
+
+        # if paper_title in item['title'][0]:
+        if abs(len(words) - number_of_matches) < 3:
+            mymatches.append(item)
+            if len(words) != number_of_matches:
+                print('\twhich is a close but not exact match exists:')
+                # print('\t', paper_title)
+                # print('\t', words)
+                # print('\t', bibtex)
+                # print()
+                # shutil.copy(src, dst)
+                continue # 题目没完全对上
+            else:
+                bibtex_dict = get_bibtex_entry(item['DOI'])
+                if bibtex_dict is None:
+                    print('[Error] You need to manuall add bibtex for this paper:', item['DOI'], paper_title)
+                try:
+                    bibtex_dict['CitedBy'] = str(habanero.counts.citation_count(doi=item['DOI']))
+                except Exception as e:
+                    print('[Error] CB:', habanero.counts.citation_count(doi=item['DOI']))
+
+                bibtex = entries_to_str([bibtex_dict])
+                f.write(bibtex + '\n')
+                bool_found_in_first_crossref_query = True
+                print('\tDone.')
+
+                if len(mymatches) > 1:
+                    print('Here is the list of the close matches:')
+                    for el in mymatches:
+                        print(el)
+                break # the first one should be the most relervant for most cases
+        else:
+            continue # 题目对不上
+    return bool_found_in_first_crossref_query
+
+def process_paper_title(paper_title):
+    paper_title = paper_title.replace('-', ' ')
+    paper_title = paper_title.replace('"', ' ')
+    paper_title = paper_title.lower()
+    return paper_title
 
 if __name__ == '__main__':
 
     pdf_saved_folder = r'D:\horyc\Downloads\Documents\IEEExplore'
+    dst = './auto-references/'
+    if not os.path.exists(dst):
+        os.mkdir(dst)
 
-    cr = habanero.Crossref()
-    for root,dirs,files in os.walk(pdf_saved_folder):
+    f = open('auto-references.bib', 'w')
+
+    cr = habanero.Crossref() # https://habanero.readthedocs.io/en/latest/modules/crossref.html
+    count = 0
+    for root, dirs, files in os.walk(pdf_saved_folder):
         for name in files:
-            if '.pdf' in name:
-                src = os.path.join(root, name)
-                # print(src)
+            if '.pdf' not in name:
+                continue
 
-                paper_title = name[:-4].replace('_', ' ')
-                # paper_title = 'Speed Sensorless Model Predictive Torque Control of Induction Motors using A Modified Adaptive Full-order Observer'
+            src = os.path.join(root, name)
+            # print(src)
 
-                res = cr.works( query=paper_title,
-                                select = ["DOI","title"])
+            # 搜要用IEEExpolore给你的名字去搜
+            res = cr.works( query = name[:-4].replace('_', ' '), select = ["DOI", "title"], limit = 100)
+            paper_title = process_paper_title( name[:-4].replace('_', ' ') )
+            print('\n-----', count); count+=1
+            bool_found_in_first_crossref_query = process_cr_result(res, paper_title, src, dst)
 
-                for item in res['message']['items']:
-                    if paper_title in item['title'][0]:
-
-                        # print(item['title'][0])
-                        # print(item['DOI'])
-                        # print('Cited by:', habanero.counts.citation_count(doi=item['DOI']))
-                        # print(get_bibtex_entry(item['DOI']))
-                        # print('--------------')
-                        print(entries_to_str([get_bibtex_entry(item['DOI'])]))
-                    else:
-                        raise Exception(f'Not found by Crossref: {src}')
-
-                    break # the first one should be the most relervant
+            if not bool_found_in_first_crossref_query:
+                # res = cr.works( query = name[:-4].replace('_', ' '), select = ["DOI", "title"], limit = 100)
+                # paper_title = process_paper_title( name[:-4].replace('_', ' ') )
+                # if not (process_cr_result(res, paper_title)):
+                print('=========================')
+                print(res['message']['items'])
+                raise Exception(f'Not found by Crossref: {src}')
+    f.close()
